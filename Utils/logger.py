@@ -1,7 +1,11 @@
 import os
 import logging
+import threading
 
 class LoggingManager:
+    # 添加一个静态的锁对象，用于保证并发写入同一个文件时只有一个实例在写入
+    file_lock = threading.Lock()
+
     def __init__(self, logger_name, log_file=None, level=logging.INFO):
         self.logger = logging.getLogger(logger_name)
         self.logger.setLevel(level)
@@ -24,16 +28,21 @@ class LoggingManager:
 
 
     def debug(self, msg):
-        self.logger.debug(msg)
+        with self.file_lock:
+            self.logger.debug(msg)
 
     def info(self, msg):
-        self.logger.info(msg)
+        with self.file_lock:
+            self.logger.info(msg)
 
     def warning(self, msg):
-        self.logger.warning(msg)
+        with self.file_lock:
+            self.logger.warning(msg)
 
     def error(self, msg):
-        self.logger.error(msg)
+        with self.file_lock:
+            self.logger.error(msg)
 
     def critical(self, msg):
-        self.logger.critical(msg)
+        with self.file_lock:
+            self.logger.critical(msg)

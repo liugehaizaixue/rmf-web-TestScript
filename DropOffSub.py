@@ -3,12 +3,14 @@ from Utils.logger import LoggingManager
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
+from Utils.logger import LoggingManager
 """
 监听topic,记录机器人发起的dropoff任务 
 """
 class DropOffSubscriber(Node):
 
-    def __init__(self):
+    def __init__(self , log_name = "DropOffSubscriber" ):
+        self.logger = LoggingManager('DropOffSubscriber', log_file='logs/'+log_name).logger
         self.node = rclpy.create_node("drop_off_subscriber")
         self.subscription = self.node.create_subscription(
             String,
@@ -21,6 +23,7 @@ class DropOffSubscriber(Node):
     def listener_callback(self, msg):
         # self.get_logger().info('收到的消息: "%s"' % msg.data)
         print(msg)
+        self.logger.info("获取msg:"+str(msg))
         # 判断dropoff-id，决定是否加入
         self.dropoff_list.append(msg.data)
         # self.msg_event.set()
@@ -39,5 +42,5 @@ class DropOffSubscriber(Node):
 
 """ 
 终端测试命令
-ros2 topic pub /chatter std_msgs/String "data: Hello world"
+ros2 topic pub /my_topic std_msgs/String "data: Hello world"
 """

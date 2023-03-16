@@ -61,12 +61,12 @@ class TestScript:
         self.retry_count = {}
 
         # 监听dropoff部分
-        self.drop_subscriber = DropOffSubscriber()
+        self.drop_subscriber = DropOffSubscriber(log_name=log_name)
         self.drop_is_listening = True
         self.drop_sub_thread = threading.Thread(target=self.DropSubThread)
 
         # 监听FleetState部分
-        self.fleet_state_getter = FleetState()
+        self.fleet_state_getter = FleetState(log_name=log_name)
         self.fleet_state_running = True
         self.fleet_state_thread = threading.Thread(target=self.FleetStateRun)
 

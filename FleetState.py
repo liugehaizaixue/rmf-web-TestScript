@@ -2,12 +2,13 @@ import requests
 import threading
 import time
 import queue
+from Utils.logger import LoggingManager
 
 """
 记录机器人状态 
 """
 class FleetState:
-    def __init__(self,interval=5,fleet_name="tinyRobot"):
+    def __init__(self,interval=5 , fleet_name="tinyRobot" , log_name="FleetState"):
         self.interval = interval
         self.state_value = None
         self.token=None
@@ -16,7 +17,7 @@ class FleetState:
         self.thread = threading.Thread(target=self.update_state)
         self.thread.start()
         self.fleet_name = fleet_name
-
+        self.logger = LoggingManager('FleetState', log_file='logs/'+log_name).logger
     def update_state(self):
         while not self.stopped:  # 判断程序是否应该停止
             # 发送http请求获取FleetState
@@ -25,6 +26,7 @@ class FleetState:
                 headers = {"Authorization": f"Bearer {self.token}"}
                 response = requests.get(url=fleet_state_url,headers=headers)
                 if response.status_code == 200:
+                    self.logger.info("获取RobotStates:")
                     json_data = response.json()
                     self.state_value = json_data["robots"]
                     self.queue.put(self.state_value)
