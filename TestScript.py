@@ -6,6 +6,9 @@ dropoff根据地图waypoint由机器人随机生成
 
 创建subscriber,监听机器人发起的dropoff任务,日志记录
 
+
+测试充电任务能否被打断
+先手动测试一趟,是否符合仿真要求
 """
 import random 
 import requests
@@ -13,8 +16,8 @@ import time
 import json
 import threading
 import queue
-# from Utils.logger import Logger
 from DropOffSub import DropOffSubscriber
+from FleetState import FleetState
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
@@ -41,9 +44,9 @@ class TestScript:
         self.cancel_task_num = 0
         self.robots = ["tinyRobot1"]
         self.GetWaypoints()
-        self.GetToken()
         self.PickList=[] #记录发起pickup任务id，执行完毕后删除
         self.DropList=[]
+        self.FleetStateDict = {}
         # 创建线程同步对象和队列
         # self.lock = threading.Lock()
         # self.queue = queue.Queue()
@@ -57,30 +60,47 @@ class TestScript:
         # 失败重试次数标志
         self.retry_count = {}
 
-        self.subscriber = DropOffSubscriber()
-        self.sub_event = threading.Event()
-        def update_data():
-            while not self.sub_event.wait(0.1):  # 每0.1秒更新一次数据
-                self.DropList = self.subscriber.get_dropoff()
-                self.sub_event.set()
+        # 监听dropoff部分
+        self.drop_subscriber = DropOffSubscriber()
+        self.drop_is_listening = True
+        self.drop_sub_thread = threading.Thread(target=self.DropSubThread)
 
-        self.sub_thread = threading.Thread(target=update_data)
-        self.sub_thread.start()
+        # 监听FleetState部分
+        self.fleet_state_getter = FleetState()
+        self.fleet_state_running = True
+        self.fleet_state_thread = threading.Thread(target=self.FleetStateRun)
 
+        self.GetToken()
 
-    def get_subscriber_drop_list(self):
-        self.sub_event.wait()
-        self.sub_event.clear()
-        return self.DropList
-    
-    def subscriber_run(self):
-        rclpy.spin(self.subscriber)
+    def FleetStateRun(self):
+        while self.fleet_state_running:
+            value = self.fleet_state_getter.get_state()
+            if value is None:  # 判断是否应该退出循环
+                break
+            self.FleetStateDict = value
+            self.logger.info("Fleet State :"+str(self.FleetStateDict))
+            
+    def FleetStateStop(self):
+        self.fleet_state_running = False
+        self.fleet_state_getter.stop()
 
-    def subscriber_stop(self):
-        self.sub_event.set()
-        self.sub_thread.join()
-        self.subscriber.destroy_node()
-        rclpy.shutdown()
+    def FleetStateStart(self):
+        self.fleet_state_thread.start()           
+
+    def DropSubThread(self):
+        # 在这里执行其他操作，并等待停止监听的信号
+        while self.drop_is_listening:
+            rclpy.spin_once(self.drop_subscriber.node)
+        # 停止ROS2消息的监听
+        self.drop_subscriber.destroy_subscription(self.drop_subscriber.subscription)
+        self.drop_subscriber.destroy_node()    
+
+    def StartDropSub(self):
+        # 启动监听线程
+        self.drop_sub_thread.start()
+
+    def StopDropSub(self):
+        self.drop_is_listening = False
 
     def GetWaypoints(self):
         file_path = './Setting/lejushandong.building.yaml'
@@ -98,7 +118,6 @@ class TestScript:
         self.waypoints.remove("lift1")
         self.logger.info("获取Waypoints:")
         self.logger.info(self.waypoints)
-        # logger.log()
 
     def RandomCreate(self):
         self.create_task_stop_flag = False
@@ -119,9 +138,9 @@ class TestScript:
         choice_type = random.choice(self.pick_types)
         # 随机生成pickup任务地点进行提交
         pickup_place = random.choice(self.waypoints)
-        choice_robot = random.choice(self.robots)
         unix_millis = int(round(time.time() * 1000))
         if choice_type == "robot_task_request" :
+            choice_robot = random.choice(self.robots)
             task_data = {
                 "type":"robot_task_request",
                 "payload":{
@@ -344,6 +363,7 @@ class TestScript:
         if response.status_code == 200:
             response_json = response.json()
             self.token = response_json['access_token']
+            self.fleet_state_getter.token = self.token
             # self.logger.info('access_token:', self.token)
         else:
             self.logger.warning('获取token请求失败:', response.status_code)
@@ -405,13 +425,11 @@ class TestScript:
 
 
 # 启动机器人、rmf 、web
-# logger = Logger("/path/to/log/directory/")
-# errorlogger = Logger("/path/to/log/directory/") # 只记录error
 rclpy.init(args=None)
 tscript = TestScript()
 tscript.logger.info("init testscript")
-# tscript.subscriber_run()
-# tscript.logger.info("tscript.subscriber_run()")
+tscript.StartDropSub()
+tscript.logger.info("tscript.StartDropSub()")
 # 获取token
 tscript.start_refresh_token()
 tscript.logger.info("tscript.start_refresh_token()")
@@ -419,6 +437,8 @@ tscript.logger.info("tscript.start_refresh_token()")
 time.sleep(2)
 while tscript.token is None:
     continue
+tscript.FleetStateStart()
+tscript.logger.info("tscript.FleetStateRun()")
 tscript.start_create_task()
 tscript.logger.info("tscript.start_create_task()")
 tscript.start_cancel_task()
@@ -434,10 +454,16 @@ tscript.logger.info("结束,停止发送任务")
 # 结束，停止发送任务
 tscript.stop_create_task()
 tscript.stop_cancel_task()
-
+tscript.StopDropSub()
+tscript.logger.info("tscript.StopDropSub()")
+rclpy.shutdown()
+tscript.logger.info("rclpy.shutdown()")
+tscript.logger.info(".......")
 tscript.logger.info("待当前所有任务执行完毕。")
 # 待当前所有任务执行完毕。
+tscript.FleetStateStop()
+tscript.logger.info("tscript.FleetStateStop()")
 tscript.stop_get_task_state()
-
-# tscript.subscriber_stop()
+tscript.logger.info("tscript.stop_get_task_state()")
 tscript.stop_refresh_token()
+tscript.logger.info("tscript.stop_refresh_token()")
