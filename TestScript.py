@@ -1,15 +1,3 @@
-""" 
-切换大地图
-任务 产生与取消 pickup/dropoff
-dropoff根据地图waypoint由机器人随机生成
-充电任务根据机器人电量自动生成———充电任务,则记录机器人在设定电量下,是否前去充电 ?
-
-创建subscriber,监听机器人发起的dropoff任务,日志记录
-
-
-测试充电任务能否被打断
-先手动测试一趟,是否符合仿真要求
-"""
 import random 
 import requests
 import time
@@ -40,23 +28,23 @@ class TestScript:
         self.pick_types = ["robot_task_request","dispatch_task_request"]
         # self.pick_types = ["robot_task_request"]
         self.init_time = time.time()
-        self.current_task_num = 0
-        self.cancel_task_num = 0
-        self.robots = ["tinyRobot1"]
+        self.current_pick_num = 0 # 用发起的pickup任务数量 作为结束 标志
+        self.dispatch_task_num = 0
+        self.robot_task_num = 0
+        self.cancel_task_num = 0 # 记录取消任务数量
+        self.robots = ["tinyRobot_1","tinyRobot_2","tinyRobot_3","tinyRobot_4","tinyRobot_5","tinyRobot_6","tinyRobot_7","tinyRobot_8","tinyRobot_9","tinyRobot_10"]
         self.GetWaypoints()
-        self.PickList=[] #记录发起pickup任务id，执行完毕后删除
-        self.DropList=[]
+        self.PickDict={} #记录发起pickup任务id，每个任务id对应不同的状态{“task_id_1”:"queue",“task_id_2”:"underway",}
+        self.DropDict={}
         self.FleetStateDict = {}
-        # 创建线程同步对象和队列
-        # self.lock = threading.Lock()
-        # self.queue = queue.Queue()
-        # self.lock_event = threading.Event()
+
 
         # 线程停止标志位
         self.create_task_stop_flag = False  
         self.cancel_task_stop_flag = False  
         self.refresh_token_stop_flag = False  
         self.get_task_state_stop_flag = False
+        self.wait_for_finish = False
         # 失败重试次数标志
         self.retry_count = {}
 
@@ -70,7 +58,7 @@ class TestScript:
         self.fleet_state_running = True
         self.fleet_state_thread = threading.Thread(target=self.FleetStateRun)
 
-        self.GetToken()
+        # self.GetToken() # 暂时不需要登录
 
     def FleetStateRun(self):
         while self.fleet_state_running:
@@ -103,7 +91,7 @@ class TestScript:
         self.drop_is_listening = False
 
     def GetWaypoints(self):
-        file_path = './Setting/lejushandong.building.yaml'
+        file_path = './Setting/airport_terminal.building.yaml'
         with open(file_path, 'r') as f:
             yaml_content = f.read()
         # 解析YAML内容
@@ -125,11 +113,10 @@ class TestScript:
             interval = random.randint(5,50)
             random_tasks_num = random.randint(10,20)
             for i in range(random_tasks_num):
-                self.current_task_num = self.current_task_num + 1
                 self.CreateTask()
             #  每次随机生成 5-10个任务
             self.logger.info(f"睡眠{interval}生成个{random_tasks_num}任务")
-            self.logger.info("current_task_num:"+str(self.current_task_num))
+            self.logger.info("current_pick_num:"+str(self.current_pick_num))
             time.sleep(interval)  # 每5-100s刷新创建一轮任务
 
     
@@ -193,11 +180,14 @@ class TestScript:
     def SendTask(self,task_data,req_id):
         if task_data["type"] == "robot_task_request" :
             url = "http://127.0.0.1:8000/tasks/robot_task"
+            self.dispatch_task_num = self.dispatch_task_num + 1
         elif task_data["type"] == "dispatch_task_request" :
-            url = "http://127.0.0.1:8000/tasks/dispatch_task"        
-        headers = {"Authorization": f"Bearer {self.token}"}
+            url = "http://127.0.0.1:8000/tasks/dispatch_task"
+            self.robot_task_num = self.robot_task_num + 1     
+        # headers = {"Authorization": f"Bearer {self.token}"}
         payload = task_data["payload"]
-        response = requests.post(url=url, json=payload,headers=headers)
+        # response = requests.post(url=url, json=payload,headers=headers)
+        response = requests.post(url=url, json=payload)
         self.logger.info("send Task : "+req_id)
         self.HandleCreateRespone(response=response,req_id=req_id,task_data=task_data, retry_count=self.retry_count)
         # 机器人根据pick随机生成dropoff
@@ -209,7 +199,7 @@ class TestScript:
         if self.cancel_task_thread is not None:
             self.cancel_task_stop_flag = True
 
-    # 从PickList中随机取消任务
+    # 随机取消任务
     def RandomCancel(self):
         self.cancel_task_stop_flag = False  
         while not self.cancel_task_stop_flag:
@@ -217,25 +207,36 @@ class TestScript:
             random_tasks_num = random.randint(1,5)
             self.logger.info(f"睡眠{interval}取消个{random_tasks_num}任务")
             time.sleep(interval)  # 每60-180s刷新一轮取消任务
+            CancellableList = []  # 中间数组，保存可删除任务的列表
+            for key, value in self.PickDict.items():
+                if value != 'canceled' and value != 'completed':
+                    CancellableList.append(key)
+            # 将数组中的元素作为键添加到字典中
+            for drop_id in self.drop_subscriber.get_dropoff():
+                self.DropDict.setdefault(drop_id, "queue")
+            for key, value in self.DropDict.items():
+                if value != 'canceled' and value != 'completed':
+                    CancellableList.append(key)
             for i in range(random_tasks_num):
-                if len(self.PickList) != 0 :
-                    task_id = random.choice(self.PickList)
+                if len(CancellableList) != 0 :
+                    task_id = random.choice(CancellableList)
                     self.logger.info(f"申请取消{task_id}任务")
                     req_id = str(uuid.uuid4())
                     self.CancelTask(task_id=task_id,req_id=req_id)
                 else:
-                    self.logger.info("当前pickup队列为空")
+                    self.logger.info("当前CancellableList队列为空")
             #  每次随机取消1-5个任务
     
     # 发送取消任务请求
     def CancelTask(self,task_id,req_id):
         url = "http://localhost:8000/tasks/cancel_task"
-        headers = {"Authorization": f"Bearer {self.token}"}
+        # headers = {"Authorization": f"Bearer {self.token}"}
         payload={
             "type":"cancel_task_request",
             "task_id":task_id
         }
-        response = requests.post(url=url, json=payload,headers=headers)
+        # response = requests.post(url=url, json=payload,headers=headers)
+        response = requests.post(url=url, json=payload)
         self.logger.info("CancelTask:"+task_id)
         self.HandleCancelRespone(response=response,task_id=task_id,req_id=req_id,retry_count=self.retry_count)
     
@@ -243,15 +244,11 @@ class TestScript:
         if req_id not in retry_count:
             retry_count[req_id] = 0
         if response.status_code == 200:
+            # 成功取消任务
             self.logger.info("HandleCancelRespone:"+str(response.status_code))
             self.cancel_task_num = self.cancel_task_num + 1
-            if task_id in self.PickList:
-                self.PickList.remove(task_id)
-                # self.lock.acquire()  # 加锁
-                # self.queue.put(self.PickList)  # 将新数组添加到队列中
-                # self.lock.release()  # 解锁
-                 # 触发事件，通知其他线程有新数据可用
-                # self.lock_event.set()
+            if task_id in self.PickDict:
+                self.PickDict[task_id]=="canceled"
         # 如果response 是 401，未认证，则重新获取token再发送任务
         elif response.status_code == 401 or response.status_code == 403:
             self.logger.warning("HandleCancelRespone:"+str(response.status_code))
@@ -288,14 +285,9 @@ class TestScript:
             self.logger.info("HandleCreateRespone:"+str(response.status_code))
             json_data = response.json()
             task_id = json_data["state"]["booking"]["id"]
-            self.PickList.append(task_id)
-            # self.lock.acquire()  # 加锁
-            # self.queue.put(self.PickList)  # 将新数组添加到队列中
-            # self.lock.release()  # 解锁
-                # 触发事件，通知其他线程有新数据可用
-            # self.lock_event.set()
+            self.PickDict[task_id] = 'queue'
+            self.current_pick_num = self.current_pick_num + 1
 
-            # self.current_task_num = self.current_task_num + 1
        # 如果response 是 401，未认证，则重新获取token再发送任务
         elif response.status_code == 401 or response.status_code == 403:
             self.logger.warning("HandleCreateRespone:"+str(response.status_code))
@@ -326,23 +318,40 @@ class TestScript:
                 self.logger.warning(f"Reached max retry count ({max_retry_count}), giving up.")
                 
 
-    def HandleGetTaskStateRespone(self,response,task_id):
+    def HandleGetPickTaskStateRespone(self,response,task_id):
         if response.status_code == 200:
-            self.logger.info("HandleGetTaskStateRespone:"+str(response.status_code))
-            pass
-        # 如果response 是 401，未认证，则重新获取token再发送任务
-        elif response.status_code == 401 or response.status_code == 403:
-            self.logger.warning("HandleGetTaskStateRespone:"+str(response.status_code))
-            # 认证失败，重新获取token
-            self.GetToken()
-            time.sleep(2)
-            #    
+            self.logger.info("GetPickTaskStateRespone:"+str(response.status_code))
+            self.HandleGetTaskStateResponse(response,task_id,"pickup")
         else :
-            self.logger.warning("HandleGetTaskStateRespone:"+str(response.status_code))
-            # response_json = response.json()
-            # error = response_json['error']
-            # self.logger.warning(f'请求失败：{response.status_code},{error}')
-            # 
+            self.logger.warning("GetPickTaskStateRespone:"+str(response.status_code))
+
+    def HandleGetDropTaskStateRespone(self,response,task_id):
+        if response.status_code == 200:
+            self.logger.info("GetDropTaskStateRespone:"+str(response.status_code))
+            self.HandleGetTaskStateResponse(response,task_id,"dropoff")
+        else :
+            self.logger.warning("GetDropTaskStateRespone:"+str(response.status_code))
+
+    def HandleGetTaskStateResponse(self,response,task_id,task_type):
+        # 获取结果并从任务队列中设置状态
+        # uninitialized, blocked, error, failed, queued, standby, underway, delayed, skipped, canceled, killed, completed
+        response_json = response.json()
+        task_status = response_json["status"]
+        if task_type =="pickup":
+            self.PickDict[task_id]=task_status
+        else :
+            self.DropDict[task_id]=task_status
+    
+    def HandleGetTaskState(self):
+        #判断所有pick与drop任务是否都是'canceled', 'completed'
+        #如果满足要求则设置self.wait_for_finish = True
+        # 判断字典中的值是否都是 target_values 中的值
+
+        # 要判断的值
+        target_values = ['canceled', 'completed']
+        if all(value in target_values for value in self.PickDict.values()) and all(value in target_values for value in self.DropDict.values()):
+            print('所有任务都是', target_values)
+            self.wait_for_finish = True
 
     # 登录，获取token
     def GetToken(self):
@@ -391,39 +400,57 @@ class TestScript:
 
 
     """ 定时获取当前rmf任务状态
-        不断获取当前PickList中各个任务状态
-        若任务完成或取消 则从List中删除
-        若正在执行或queue则无视
-        若异常则报告该任务id 
+        不断获取当前各个任务状态
     """
-    def GetTaskState(self):
+    def StartGetTaskState(self):
         self.get_task_state_stop_flag = False
         while not self.get_task_state_stop_flag:
-            self.logger.info("GetTaskState")
-             # 等待事件的触发
-            # self.lock_event.wait()
-            # self.lock.acquire()  # 加锁
-            # if not self.queue.empty():
-                 # 从队列中获取新数组
-                # self.PickList = self.queue.get()
-            for task_id in self.PickList:
-                url = "http://localhost:8000/tasks/"+task_id+"/state"
-                headers = {"Authorization": f"Bearer {self.token}"}
-                response = requests.get(url=url,headers=headers)
-            # self.lock.release()  # 解锁
-            # 清除事件，等待下一次触发
-            # self.lock_event.clear()
-            # 设定时间间隔，等待下一次发送请求
+            self.logger.info("StartGetTaskState")
+            self.GetTaskState()
+            self.HandleGetTaskState()
             time.sleep(10)
 
+    def GetTaskState(self):
+        PickList = []  # 中间数组，保存未结束任务的列表
+        for key, value in self.PickDict.items():
+            if value != 'canceled' and value != 'completed':
+                PickList.append(key)
+
+        for task_id in PickList:
+            url = "http://localhost:8000/tasks/"+task_id+"/state"
+            # headers = {"Authorization": f"Bearer {self.token}"}
+            # response = requests.get(url=url,headers=headers)
+            response = requests.get(url=url)
+            self.HandleGetPickTaskStateRespone(response,task_id)
+            time.sleep(0.05)
+        
+
+        # 将数组中的元素作为键添加到字典中
+        for drop_id in self.drop_subscriber.get_dropoff():
+            self.DropDict.setdefault(drop_id, "queue")
+        DropList = [] # 中间数组，保存未结束任务的列表
+        for key, value in self.DropDict.items():
+            if value != 'canceled' and value != 'completed':
+                DropList.append(key)
+
+        for task_id in DropList:
+            url = "http://localhost:8000/tasks/"+task_id+"/state"
+            # headers = {"Authorization": f"Bearer {self.token}"}
+            # response = requests.get(url=url,headers=headers)
+            response = requests.get(url=url)
+            self.HandleGetDropTaskStateRespone(response,task_id)
+            time.sleep(0.05)
+
     def start_get_task_state(self):
-        self.get_task_state_thread = threading.Thread(target=self.GetTaskState)
+        self.get_task_state_thread = threading.Thread(target=self.StartGetTaskState)
         self.get_task_state_thread.start()
     def stop_get_task_state(self):
         if self.get_task_state_thread is not None:
             self.get_task_state_stop_flag = True
 
 
+
+start_time = time.time() #程序开始时间
 # 启动机器人、rmf 、web
 rclpy.init(args=None)
 tscript = TestScript()
@@ -431,8 +458,8 @@ tscript.logger.info("init testscript")
 tscript.StartDropSub()
 tscript.logger.info("tscript.StartDropSub()")
 # 获取token
-tscript.start_refresh_token()
-tscript.logger.info("tscript.start_refresh_token()")
+# tscript.start_refresh_token()
+# tscript.logger.info("tscript.start_refresh_token()")
 # 开始随机发起任务
 time.sleep(2)
 while tscript.token is None:
@@ -446,7 +473,7 @@ tscript.logger.info("tscript.start_cancel_task()")
 tscript.start_get_task_state()
 tscript.logger.info("tscript.start_get_task_state()")
 
-while tscript.current_task_num < tscript.total_tasks \
+while tscript.current_pick_num < tscript.total_tasks \
     and (time.time() < tscript.init_time + (tscript.total_run_time*3600)):
     #不满足条件，继续循环
     pass
@@ -458,12 +485,22 @@ tscript.StopDropSub()
 tscript.logger.info("tscript.StopDropSub()")
 rclpy.shutdown()
 tscript.logger.info("rclpy.shutdown()")
-tscript.logger.info(".......")
+
+stop_time = time.time() # 停止发送任务时间
 tscript.logger.info("待当前所有任务执行完毕。")
-# 待当前所有任务执行完毕。
+# 待当前所有任务执行完毕，或抛出异常
+while tscript.wait_for_finish == False :
+    pass
+
+tscript.logger.info(".......")
+tscript.logger.info("当前所有任务已执行完毕。")
 tscript.FleetStateStop()
 tscript.logger.info("tscript.FleetStateStop()")
 tscript.stop_get_task_state()
 tscript.logger.info("tscript.stop_get_task_state()")
 tscript.stop_refresh_token()
 tscript.logger.info("tscript.stop_refresh_token()")
+
+end_time = time.time() # 程序结束时间
+run_time = end_time - start_time
+drop_num = len(tscript.DropDict)

@@ -23,8 +23,9 @@ class FleetState:
             # 发送http请求获取FleetState
             if self.token is not None :
                 fleet_state_url = "http://localhost:8000/fleets/"+self.fleet_name+"/state"
-                headers = {"Authorization": f"Bearer {self.token}"}
-                response = requests.get(url=fleet_state_url,headers=headers)
+                # headers = {"Authorization": f"Bearer {self.token}"}
+                # response = requests.get(url=fleet_state_url,headers=headers)
+                response = requests.get(url=fleet_state_url)
                 if response.status_code == 200:
                     self.logger.info("获取RobotStates:")
                     json_data = response.json()
