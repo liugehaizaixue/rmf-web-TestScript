@@ -128,6 +128,7 @@ class TestScript:
         unix_millis = int(round(time.time() * 1000))
         if choice_type == "robot_task_request" :
             choice_robot = random.choice(self.robots)
+            self.dispatch_task_num = self.dispatch_task_num + 1
             task_data = {
                 "type":"robot_task_request",
                 "payload":{
@@ -148,6 +149,7 @@ class TestScript:
                 }
             }
         elif choice_type == "dispatch_task_request" :
+            self.robot_task_num = self.robot_task_num + 1  
             task_data = {
                 "type":"dispatch_task_request",
                 "payload":{
@@ -180,10 +182,8 @@ class TestScript:
     def SendTask(self,task_data,req_id):
         if task_data["type"] == "robot_task_request" :
             url = "http://127.0.0.1:8000/tasks/robot_task"
-            self.dispatch_task_num = self.dispatch_task_num + 1
         elif task_data["type"] == "dispatch_task_request" :
-            url = "http://127.0.0.1:8000/tasks/dispatch_task"
-            self.robot_task_num = self.robot_task_num + 1     
+            url = "http://127.0.0.1:8000/tasks/dispatch_task"   
         # headers = {"Authorization": f"Bearer {self.token}"}
         payload = task_data["payload"]
         # response = requests.post(url=url, json=payload,headers=headers)
@@ -504,3 +504,15 @@ tscript.logger.info("tscript.stop_refresh_token()")
 end_time = time.time() # 程序结束时间
 run_time = end_time - start_time
 drop_num = len(tscript.DropDict)
+
+total_num = drop_num + tscript.current_pick_num + tscript.cancel_task_num 
+tscript.logger.info(f"本次共执行{total_num}个任务，其中，"
+                    f"pickup任务{tscript.current_pick_num}个，pickup任务中有"
+                        f"{tscript.dispatch_task_num}个dispatch任务，"
+                        f"{tscript.robot_task_num}个robot任务"
+                    f"dropoff任务{drop_num}个"
+                    f"cancel任务{tscript.cancel_task_num}个"
+                    f"此次脚本开始时间{start_time}"
+                    f"停止发送任务时间{stop_time}"
+                    f"程序结束时间{end_time}"
+                    f"总运行时间{run_time}")
